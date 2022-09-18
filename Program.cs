@@ -2,19 +2,22 @@
 using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
 
+// TODO: atualmente o programa só roda em windows.
+// ao rodar em máquina diferente, as variáveis user-data-dir e profile-directory precisam ser ajustadas
+
 var chatUrl = string.Empty;
 var message = string.Empty;
+var chatId = string.Empty;
 
 try
 {
     message = WriteAndReadLine("Insira a mensagem a ser enviada: ");
 
-
     Console.WriteLine("Exemplo de telefone: 5511999999999");
-    Console.WriteLine("Exemplo de chatId: ES7ntMUvp9r39U0BrYLZg2");
+    Console.WriteLine("Exemplo de chatId: ES7ntMUvp9r39U0BrYLZg2 (rocket), IR9YkcuJaL45hcsVE8Qaa4 (anotacoes paula e lucas)");
     Console.WriteLine();
 
-    var chatId = WriteAndReadLine("Insira o telefone (somente numeros) ou chatId: ");
+    chatId = WriteAndReadLine("Insira o telefone (somente numeros) ou chatId: ");
 
     if (IsDigitsOnly(chatId))
     {
@@ -25,28 +28,24 @@ try
         }
     }
 
-    Console.WriteLine("Amanha só significa amanhã depois que voce dormir.");
-    Console.WriteLine("Mensagens agendadas de madrugada são tratadas como do dia anterior.");
-    Console.WriteLine();
-
-    var isToTomorrow = ConsoleReadYesOrNo("A mensagem eh para ser enviada amanha? [Y/n] ");
+    var scheduledToNextTimeOcurrence = ConsoleReadYesOrNo("A mensagem eh para ser enviada na proxima ocorrencia de um horário? [Y/n] ");
 
     var timestamp = string.Empty;
 
-    if (isToTomorrow)
+    if (scheduledToNextTimeOcurrence)
+    {
+        Console.WriteLine("Exemplo de timestamp parcial (hora:minuto): 9:15");
+        Console.WriteLine();
+
+        timestamp = WriteAndReadLine("Insira o timestamp parcial de envio: ");
+    }
+    else
     {
         Console.WriteLine("Exemplo de timestamp completo (dia-mes hora:minuto): 25-12 9:15");
         Console.WriteLine();
 
         timestamp = WriteAndReadLine("Insira o timestamp completo de envio: ");
         Console.WriteLine();
-    }
-    else
-    {
-        Console.WriteLine("Exemplo de timestamp parcial (hora:minuto): 9:15");
-        Console.WriteLine();
-
-        timestamp = WriteAndReadLine("Insira o timestamp parcial de envio: ");
     }
 
     if (IsDigitsOnly(chatId))
@@ -58,75 +57,13 @@ try
         chatUrl = $"https://chat.whatsapp.com/{chatId}";
     }
 
-    DateTime desiredTimestamp = DateTime.MinValue;
-    timestamp = timestamp.Trim();
-    var now = DateTime.Now;
-    var seconds = new Random().Next(0, 45);
-
-    var daysInMonth = DateTime.DaysInMonth(now.Year, now.Month);
-    var isLastDayOfMonth = daysInMonth == now.Day;
-
-
-    if (!isToTomorrow)
-    {
-        // when the message is not to tomorrow (today or some other day, full timestamp)
-        // 25-12 9:15
-        const int timeToSleep = 20;
-        const int timeToWakeUp = 7;
-
-        var day = now.Hour >= timeToSleep ? now.Day + 1 : now.Day;
-        var hour = int.Parse(timestamp.Split(':')[0]);
-        var minute = int.Parse(timestamp.Split(':')[1]);
-
-        var month = isLastDayOfMonth ? now.Month + 1 : now.Month;
-        if (now.Hour > timeToSleep)
-        {
-            desiredTimestamp = new DateTime(now.Year, month, day, hour, minute, seconds);
-        }
-
-        if (now.Hour < timeToWakeUp)
-        {
-            desiredTimestamp = new DateTime(now.Year, month, day, hour, minute, seconds);
-        }
-    }
-    else 
-    {
-        // 09:15
-        var date = timestamp.Split(' ')[0];
-        var month = int.Parse(timestamp.Split('-')[1]);
-        month = isLastDayOfMonth ? month + 1 : month;
-        var day = int.Parse(timestamp.Split('-')[0]);
-
-        var time = timestamp.Split(' ')[1];
-        var hour = int.Parse(time.Split(':')[0]);
-        var minute = int.Parse(time.Split(':')[1]);
-
-        desiredTimestamp = new DateTime(now.Year, month, day, hour, minute, seconds);
-    }
-
-    if (desiredTimestamp == DateTime.MinValue)
-    {
-        throw new Exception("Erro na definicao de data do programa");
-    }
-
-    if (DateTime.Now >= desiredTimestamp)
-    {
-        throw new Exception("Data igual passada ou igual ao agora provida.");
-    }
+    var desiredTimestamp = FormatTimestamp(timestamp, !scheduledToNextTimeOcurrence);
 
     Console.WriteLine($"Mensagem vai ser enviada as ${JsonConvert.SerializeObject(desiredTimestamp)}.");
-    while (DateTime.Now != desiredTimestamp)
-    {
-        var remainingMinutesUntilMessageSend = (desiredTimestamp - DateTime.Now).Duration().Minutes;
-        var logAttempts = remainingMinutesUntilMessageSend > 15 ? remainingMinutesUntilMessageSend / 15 : 1;
-
-        
-        for (int i = 0; i < logAttempts; i++)
-        {
-            Console.WriteLine($"{DateTime.Now}: Esperando a hora de mandar a mensagem...");
-            Thread.Sleep(1000 * 60 * (remainingMinutesUntilMessageSend / logAttempts));
-        }
-    }
+    var remainingTime = (DateTime.Now - desiredTimestamp).Duration();
+    Console.WriteLine($"Agora sao {DateTime.Now}. Faltam {remainingTime.ToString(@"hh\hmm\mss\s")} pra mensagem ser enviada.");
+    WaitForDateTimeAndLogEveryTenMinutes(desiredTimestamp);
+    
 }
 catch (Exception ex)
 {
@@ -138,7 +75,8 @@ try
     var chromeOptions = new ChromeOptions();
     chromeOptions.AddArgument(@"--user-data-dir=C:\\Users\\lucas.frois\\AppData\\Local\\Google\\Chrome\\User Data");
     chromeOptions.AddArgument(@"--profile-directory=Default");
-    // TODO: cannot let chrome open during this process
+    // TODO: cannot let chrome open before opening chromedriver
+    // probably bc of profiles. i cant see a good fix for this otherwise a manual action
 
     var driver = new ChromeDriver(@"C:\dev", chromeOptions);
 
@@ -149,13 +87,22 @@ try
     var startChatElement = driver.FindElement(By.Id("action-button"));
     startChatElement.Click();
 
-    var currentUrl = driver.Url;
-    var desiredUrl = currentUrl.Replace("api", "web");
-    driver.Navigate().GoToUrl(desiredUrl);
+    var goToWhatsappWebElementSelector = IsDigitsOnly(chatId) ?
+        @"//a[contains(@href, 'web.whatsapp.com/send')]"
+        : @"//a[contains(@href, 'web.whatsapp.com/accept')]";
 
-    var chatInputElement = driver.FindElements(By.ClassName(@"selectable-text")).Last();
+    var goToWhatsappWebElement = driver.FindElement(By.XPath(goToWhatsappWebElementSelector));
+    goToWhatsappWebElement.Click();
+
+    var chatInputElement = driver.FindElement(By.XPath(@"//div[@title='Mensagem' and @role='textbox']/p"));
+
     chatInputElement.SendKeys(message);
     chatInputElement.SendKeys(Keys.Enter);
+
+    Thread.Sleep(1000);
+
+    driver.Close();
+    driver.Quit();
 }
 catch (Exception ex)
 {
@@ -202,6 +149,68 @@ string WriteAndReadLine(string stdout)
     return stdin;
 }
 
+DateTime FormatTimestamp(string timestamp, bool fullTimestamp)
+{
+    DateTime desiredTimestamp = DateTime.MinValue;
+
+    var now = DateTime.Now;
+    timestamp = timestamp.Trim();
+    var randomSecond = new Random().Next(1, 50);
+
+    if (!fullTimestamp) // short version of datetime, e.g.: 09:27
+    {
+        var hour = int.Parse(timestamp.Split(':')[0]); // 09
+        var minute = int.Parse(timestamp.Split(':')[1]); // 27
+
+        var isToTomorrow = minute > now.Minute && hour > now.Hour;
+        var isToToday = !isToTomorrow;
+
+        var tomorrow = now.AddDays(1);
+
+        desiredTimestamp = isToToday ?
+            new DateTime(now.Year, now.Month, now.Day, hour, minute, randomSecond, 0) :
+            new DateTime(tomorrow.Year, tomorrow.Month, tomorrow.Day, hour, minute, randomSecond, 0);
+    }
+    else // long version, 25-12 9:15
+    {
+        var dateSlice = timestamp.Split(' ')[0];
+        var timeSlice = timestamp.Split(' ')[1];
+
+        var day = int.Parse(dateSlice.Split('-')[0]); // 25
+        var month = int.Parse(dateSlice.Split('-')[1]); // 12
+
+        var hour = int.Parse(timeSlice.Split(':')[0]); // 09
+        var minute = int.Parse(timeSlice.Split(':')[1]); // 27
+
+        desiredTimestamp = new DateTime(now.Year, month, day, hour, minute, randomSecond, 0);
+    }
+
+    if (desiredTimestamp == DateTime.MinValue)
+    {
+        throw new Exception("Erro na definicao de data do programa");
+    }
+
+    if (DateTime.Now >= desiredTimestamp)
+    {
+        throw new Exception("Data igual passada ou igual ao agora provida.");
+    }
+
+    return desiredTimestamp;
+}
+
+void WaitForDateTimeAndLogEveryTenMinutes(DateTime desiredTimestamp)
+{
+    while (desiredTimestamp > DateTime.Now)
+    {
+        if (DateTime.Now.Minute % 10 == 0 && DateTime.Now.Second == 0 && DateTime.Now.Millisecond == 0)
+        {
+            var remainingTime = (DateTime.Now - desiredTimestamp).Duration();
+
+            Console.WriteLine($"Agora sao {DateTime.Now}. Faltam {remainingTime.ToString(@"hh\hmm\mss\s")} pra mensagem ser enviada.");
+            Thread.Sleep(100);
+        }
+    }
+}
 public static class Extensions
 {
     public static bool Between(this int number, int min, int max)
